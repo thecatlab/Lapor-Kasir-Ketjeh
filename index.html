@@ -15,14 +15,10 @@
     <!-- Firebase SDKs -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, signInWithCustomToken, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, setDoc, addDoc, serverTimestamp, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        /**
-         * NOTE FOR GITHUB PAGES:
-         * To use this on GitHub Pages, replace the config below with your actual Firebase config object:
-         * const firebaseConfig = { apiKey: "...", authDomain: "...", ... };
-         */
+        // Your specific Firebase Config
         const firebaseConfig = {
             apiKey: "AIzaSyAJR9skBOWyNciAJvxSrnPznwoAVWVhV-E",
             authDomain: "laporan-kasir-ketjeh.firebaseapp.com",
@@ -35,20 +31,17 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'ketjeh-seafood-app';
+        const appId = 'ketjeh-seafood-app';
 
         // State
         window.currentUser = null;
         window.manualStaffEmail = localStorage.getItem('ketjeh_staff_email') || "";
 
-        // Initialize Auth (RULE 3 - Must call and await before operations)
+        // Initialize Auth
         const initAuth = async () => {
             try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
+                // RULE 3 - Always authenticate first
+                await signInAnonymously(auth);
             } catch (e) {
                 console.error("Auth Init Error:", e);
                 updateAuthUI();
@@ -95,14 +88,17 @@
                 `;
                 authBtn.onclick = async () => {
                     const provider = new GoogleAuthProvider();
+                    window.showToast("Membuka login Google...");
                     try {
                         await signInWithPopup(auth, provider);
                     } catch (e) {
-                        if (e.code === 'auth/unauthorized-domain' || e.code === 'auth/configuration-not-found') {
+                        console.error("Login Error Details:", e);
+                        if (e.code === 'auth/unauthorized-domain') {
+                            window.showToast("Error: Domain tidak terdaftar di Firebase");
                             window.showManualIdentityPrompt();
                         } else {
-                            console.error("Popup Error:", e);
                             window.showToast("Gagal login: " + e.message);
+                            window.showManualIdentityPrompt(); // Fallback to manual if any error occurs
                         }
                     }
                 };
