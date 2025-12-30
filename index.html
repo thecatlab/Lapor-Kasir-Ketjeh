@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Laporan Kasir Ketjeh Seafood & Leisure</title>
+    
+    <!-- Favicon (Wallet Icon) -->
+    <link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%23059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>'>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, signInWithCustomToken, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, addDoc, serverTimestamp, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global Firebase Config provided by environment
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'ketjeh-seafood-app';
+
+        // State
+        window.currentUser = null;
+        window.manualStaffEmail = localStorage.getItem('ketjeh_staff_email') || "";
+
+        // Initialize Auth (RULE 3 - Must call and await before operations)
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (e) {
+                console.error("Auth Init Error:", e);
+            }
+        };
+        initAuth();
+
+        onAuthStateChanged(auth, (user) => {
+            window.currentUser = user;
+            updateAuthUI();
+            if (window.currentMode === 'report') window.renderContent();
+        });
+
+        function updateAuthUI() {
+            const authBtn = document.getElementById('auth-btn');
+            const user = window.currentUser;
+            
+            if (user && !user.isAnonymous) {
+                authBtn.innerHTML = `
+                    <div class="flex items-center space-x-2">
+                        <img src="${user.photoURL}" class="w-6 h-6 rounded-full border border-gray-200">
+                        <span class="hidden sm:inline text-xs font-medium text-gray-600">${user.email}</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    </div>
+                `;
+                authBtn.onclick = () => signOut(auth);
+            } else if (window.manualStaffEmail) {
+                authBtn.innerHTML = `
+                    <div class="flex items-center space-x-2 bg-emerald-50 px-2 py-1 rounded-lg border border-emerald-100">
+                        <span class="text-[10px] font-bold text-emerald-600 truncate max-w-[100px]">${window.manualStaffEmail}</span>
+                        <button onclick="window.clearManualIdentity()" class="text-gray-400 hover:text-red-500">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+                        </button>
+                    </div>
+                `;
+                authBtn.onclick = null;
+            } else {
+                authBtn.innerHTML = `
+                    <button class="flex items-center space-x-1 bg-white border border-gray-200 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm hover:bg-gray-50 transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                        <span>Login Staff</span>
+                    </button>
+                `;
+                authBtn.onclick = async () => {
+                    const provider = new GoogleAuthProvider();
+                    try {
+                        await signInWithPopup(auth, provider);
+                    } catch (e) {
+                        if (e.code === 'auth/unauthorized-domain') {
+                            window.showManualIdentityPrompt();
+                        } else {
+                            console.error("Popup Error:", e);
+                            window.showToast("Gagal login: " + e.message);
+                        }
+                    }
+                };
+            }
+        }
+
+        window.clearManualIdentity = () => {
+            window.manualStaffEmail = "";
+            localStorage.removeItem('ketjeh_staff_email');
+            updateAuthUI();
+            if (window.currentMode === 'report') window.renderContent();
+        };
+
+        window.saveReportToCloud = async (reportData, reportText) => {
+            if (!window.currentUser) return;
+            try {
+                // RULE 1: Specific path structure
+                const reportsRef = collection(db, 'artifacts', appId, 'public', 'data', 'reports');
+                await addDoc(reportsRef, {
+                    ...reportData,
+                    reportText: reportText,
+                    staffEmail: (window.currentUser && !window.currentUser.isAnonymous) ? window.currentUser.email : window.manualStaffEmail,
+                    staffName: window.currentUser.displayName || "Staff Manual",
+                    timestamp: serverTimestamp()
+                });
+            } catch (e) {
+                console.error("Firestore Save Error:", e);
+            }
+        };
+
+        window.showManualIdentityPrompt = () => {
+            const email = prompt("Google Login dibatasi di domain ini. Silakan masukkan Email Staff Anda untuk tracking:");
+            if (email && email.includes('@')) {
+                window.manualStaffEmail = email;
+                localStorage.setItem('ketjeh_staff_email', email);
+                updateAuthUI();
+                if (window.currentMode === 'report') window.renderContent();
+            }
+        };
+    </script>
+
+    <style>
+        body { font-family: 'Inter', sans-serif; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
+        input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        input[type=number] { -moz-appearance: textfield; }
+        input[type="date"] { display: block; -webkit-appearance: none; -moz-appearance: none; text-align: center; }
+        .safe-area-pb { padding-bottom: env(safe-area-inset-bottom, 1rem); }
+        .tab-active { background-color: white; color: #0f172a; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); font-weight: 600; }
+        .tab-inactive { color: #64748b; font-weight: 500; }
+        .tab-inactive:hover { color: #334155; }
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="bg-gray-100 text-slate-800 min-h-screen pb-40">
+
+    <div class="max-w-md mx-auto bg-gray-50 min-h-screen shadow-2xl relative">
+        <div class="bg-white border-b border-gray-200 sticky top-0 z-30 shadow-sm">
+            <div class="px-4 py-3 flex items-center justify-between">
+                <div class="flex items-center space-x-2">
+                    <div class="p-2 bg-emerald-100 rounded-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-6 h-6 text-emerald-600" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12V7H5a2 2 0 0 1 0-4h14v4"/><path d="M3 5v14a2 2 0 0 0 2 2h16v-5"/><path d="M18 12a2 2 0 0 0 0 4h4v-4Z"/></svg>
+                    </div>
+                    <div>
+                        <h1 class="text-sm font-bold tracking-tight text-slate-900 leading-none">Ketjeh Seafood</h1>
+                        <p class="text-[10px] text-gray-400 font-medium mt-0.5">Staff Reporting App</p>
+                    </div>
+                </div>
+                
+                <div class="flex items-center space-x-2">
+                    <div id="auth-btn" class="cursor-pointer"></div>
+                    <button onclick="window.confirmReset()" class="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors" title="Reset All">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="px-2 pb-3">
+                <div class="flex p-1 bg-gray-100 rounded-xl space-x-1">
+                    <button onclick="window.switchTab('start')" id="tab-start" class="flex-1 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-active">Awal</button>
+                    <button onclick="window.switchTab('end')" id="tab-end" class="flex-1 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Akhir</button>
+                    <button onclick="window.switchTab('expenses')" id="tab-expenses" class="flex-1 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Pengeluaran</button>
+                    <button onclick="window.switchTab('report')" id="tab-report" class="flex-1 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Laporan</button>
+                </div>
+            </div>
+        </div>
+
+        <main id="main-content" class="px-4 py-6 space-y-3"></main>
+
+        <div id="footer-summary" class="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white border-t border-gray-200 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] p-4 safe-area-pb z-20">
+            <div class="flex justify-between items-end mb-1">
+                <span id="footer-label" class="text-xs font-semibold text-gray-500 uppercase tracking-wide">Total Awal</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <div id="footer-total" class="text-3xl font-bold text-slate-900 tracking-tight">Rp 0</div>
+                <button id="copy-btn" onclick="window.copyCurrentTotal()" class="hidden text-xs font-medium text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-full hover:bg-emerald-100 transition-colors">Copy</button>
+            </div>
+        </div>
+
+        <div id="confirm-modal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-200 opacity-0 pointer-events-none" style="transition: opacity 0.2s ease-out;">
+            <div class="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl transform scale-95 transition-transform duration-200" id="confirm-modal-content">
+                <h3 class="font-bold text-lg mb-2 text-slate-900" id="modal-title">Konfirmasi</h3>
+                <p class="text-gray-600 mb-6 text-sm" id="modal-message">Apakah anda yakin?</p>
+                <div class="flex space-x-3">
+                    <button onclick="window.closeModal()" class="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-colors">Batal</button>
+                    <button id="confirm-yes-btn" class="flex-1 py-3 bg-red-600 text-white rounded-xl font-semibold hover:bg-red-700 shadow-md shadow-red-200 transition-colors">Ya, Hapus</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="toast" class="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-slate-800 text-white px-5 py-3 rounded-xl shadow-xl opacity-0 pointer-events-none transition-opacity duration-300 z-50 text-sm font-medium text-center min-w-[200px]">Disalin ke clipboard!</div>
+    </div>
+
+    <script>
+        // --- CONFIGURATION ---
+        const denominations = [
+            { value: 100000, color: 'text-red-600', bg: 'bg-red-50', border: 'border-red-200' },
+            { value: 50000, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-200' },
+            { value: 20000, color: 'text-green-600', bg: 'bg-green-50', border: 'border-green-200' },
+            { value: 10000, color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-200' },
+            { value: 5000, color: 'text-yellow-700', bg: 'bg-yellow-50', border: 'border-yellow-200' },
+            { value: 2000, color: 'text-gray-600', bg: 'bg-gray-100', border: 'border-gray-300' },
+            { value: 1000, color: 'text-gray-500', bg: 'bg-gray-50', border: 'border-gray-200' },
+            { value: 500, color: 'text-stone-500', bg: 'bg-stone-50', border: 'border-stone-200' },
+            { value: 200, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-200' },
+            { value: 100, color: 'text-slate-500', bg: 'bg-slate-100', border: 'border-slate-300' },
+        ];
+
+        const GOOGLE_DRIVE_FOLDER_ID = '1wBzVkBvLXEPn5pO87oYmJXo7wiG5H2LR';
+        const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzakj9LZ3LX5xxQKZ0P_Ea-ZpZCaWfZHqrE0LWvZYtCyy5qmI-0YUov4nnORZ5a1KL_hg/exec';
+
+        let currentMode = 'start';
+        let shiftData = { start: {}, end: {}, expenses: [], qris: '', lainLain: '', setorTunai: '', qasir: '', notes: '', reportDate: new Date().toISOString().split('T')[0] };
+        let pendingAction = null;
+
+        denominations.forEach(d => { shiftData.start[d.value] = ''; shiftData.end[d.value] = ''; });
+
+        const savedData = localStorage.getItem('skmk_kas_data_v2');
+        if (savedData) {
+            try {
+                const parsed = JSON.parse(savedData);
+                if (parsed.start) shiftData.start = { ...shiftData.start, ...parsed.start };
+                if (parsed.end) shiftData.end = { ...shiftData.end, ...parsed.end };
+                if (Array.isArray(parsed.expenses)) shiftData.expenses = parsed.expenses;
+                shiftData.qris = parsed.qris !== undefined ? parsed.qris : '';
+                shiftData.lainLain = parsed.lainLain !== undefined ? parsed.lainLain : '';
+                shiftData.setorTunai = parsed.setorTunai !== undefined ? parsed.setorTunai : '';
+                shiftData.qasir = parsed.qasir !== undefined ? parsed.qasir : '';
+                shiftData.notes = parsed.notes !== undefined ? parsed.notes : '';
+                if (parsed.reportDate) shiftData.reportDate = parsed.reportDate;
+            } catch (e) { console.error("Error loading save", e); }
+        }
+
+        const mainContent = document.getElementById('main-content');
+        const footerLabel = document.getElementById('footer-label');
+        const footerTotal = document.getElementById('footer-total');
+        const copyBtn = document.getElementById('copy-btn');
+        const footerContainer = document.getElementById('footer-summary');
+
+        const formatter = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0, maximumFractionDigits: 0 });
+        const numberFormatter = new Intl.NumberFormat('id-ID');
+
+        // --- HELPERS ---
+        function saveData() { localStorage.setItem('skmk_kas_data_v2', JSON.stringify(shiftData)); }
+
+        function calculateTotal(mode) {
+            if (mode === 'expenses') return shiftData.expenses.reduce((acc, curr) => acc + curr.amount, 0);
+            const data = shiftData[mode];
+            return denominations.reduce((acc, curr) => {
+                const qty = data[curr.value];
+                return acc + ((typeof qty === 'number' ? qty : 0) * curr.value);
+            }, 0);
+        }
+
+        function getReportCalculations() {
+            const startTotal = calculateTotal('start');
+            const endTotal = calculateTotal('end');
+            const expensesTotal = calculateTotal('expenses');
+            const qris = typeof shiftData.qris === 'number' ? shiftData.qris : 0;
+            const lainLain = typeof shiftData.lainLain === 'number' ? shiftData.lainLain : 0;
+            const setorTunai = typeof shiftData.setorTunai === 'number' ? shiftData.setorTunai : 0;
+            const netCashFlow = endTotal - startTotal;
+            const cashIncome = netCashFlow + expensesTotal + setorTunai;
+            const totalIncome = cashIncome + qris;
+            const qasir = typeof shiftData.qasir === 'number' ? shiftData.qasir : 0;
+            const discrepancy = totalIncome - qasir - lainLain;
+            return { startTotal, endTotal, expensesTotal, netCashFlow, cashIncome, qris, lainLain, setorTunai, totalIncome, qasir, discrepancy };
+        }
+
+        function formatLabel(value) {
+            if (value >= 1000) return (value / 1000) + 'K';
+            return value;
+        }
+
+        function getFormattedDate(isoDate) {
+            if (!isoDate) return '';
+            const parts = isoDate.split('-');
+            const dateObj = new Date(parts[0], parts[1] - 1, parts[2]);
+            return dateObj.toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.innerText = message || "Disalin ke clipboard!";
+            toast.classList.remove('opacity-0');
+            setTimeout(() => { toast.classList.add('opacity-0'); }, 2000);
+        }
+
+        // --- CORE ACTIONS ---
+        function updateFormattedInput(field, el) {
+            const rawValue = el.value.replace(/\D/g, '');
+            el.value = rawValue ? numberFormatter.format(rawValue) : '';
+            shiftData[field] = rawValue === '' ? '' : parseInt(rawValue, 10);
+            saveData();
+            if (currentMode === 'report') updateReportMath();
+        }
+
+        function updateNotesInput(value) { shiftData.notes = value; saveData(); }
+        function updateReportDate(value) { shiftData.reportDate = value; saveData(); renderContent(); }
+
+        function switchTab(mode) {
+            currentMode = mode;
+            ['start', 'end', 'expenses', 'report'].forEach(m => {
+                const btn = document.getElementById(`tab-${m}`);
+                if (m === mode) { btn.classList.remove('tab-inactive'); btn.classList.add('tab-active'); }
+                else { btn.classList.add('tab-inactive'); btn.classList.remove('tab-active'); }
+            });
+            renderContent();
+            updateFooter();
+        }
+
+        function updateCount(value, qtyStr) {
+            const counts = shiftData[currentMode];
+            if (qtyStr === '') counts[value] = '';
+            else { const num = parseInt(qtyStr); if (!isNaN(num) && num >= 0) counts[value] = num; }
+            saveData(); updateFooter(); updateRowVisuals(value);
+        }
+
+        function updateRowVisuals(changedValue) {
+            if (currentMode === 'expenses' || currentMode === 'report') return;
+            const counts = shiftData[currentMode];
+            const qty = counts[changedValue];
+            const denom = denominations.find(d => d.value === changedValue);
+            const subtotal = (qty || 0) * denom.value;
+            const row = document.getElementById(`row-${changedValue}`);
+            const subtotalEl = document.getElementById(`subtotal-${changedValue}`);
+            if (qty) { row.className = `flex items-center p-3 rounded-xl border-2 transition-all duration-200 bg-white shadow-sm ${denom.border}`; } else { row.className = `flex items-center p-3 rounded-xl border-2 transition-all duration-200 bg-white shadow-sm border-transparent hover:border-gray-200`; }
+            if (subtotal > 0) { subtotalEl.className = 'font-medium text-slate-900'; subtotalEl.textContent = formatter.format(subtotal).replace('Rp', '').trim(); } else { subtotalEl.className = 'font-medium text-gray-300'; subtotalEl.textContent = '-'; }
+        }
+
+        function updateFooter() {
+            if (currentMode === 'report') return;
+            const total = calculateTotal(currentMode);
+            footerTotal.textContent = formatter.format(total);
+            if (currentMode === 'start') footerLabel.textContent = 'Total Kas Awal';
+            else if (currentMode === 'end') footerLabel.textContent = 'Total Kas Akhir';
+            else if (currentMode === 'expenses') footerLabel.textContent = 'Total Pengeluaran';
+            if (total > 0) copyBtn.classList.remove('hidden'); else copyBtn.classList.add('hidden');
+        }
+
+        function copyCurrentTotal() {
+            const total = calculateTotal(currentMode);
+            let label = "";
+            if (currentMode === 'start') label = "Total Kas Awal";
+            else if (currentMode === 'end') label = "Total Kas Akhir";
+            else if (currentMode === 'expenses') label = "Total Pengeluaran";
+            doCopy(`${label}: ${formatter.format(total)}`);
+        }
+
+        function doCopy(text) {
+            if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => showToast()).catch(() => fallbackCopy(text));
+            else fallbackCopy(text);
+        }
+
+        function fallbackCopy(text) {
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try { document.execCommand('copy'); showToast(); } catch (err) { }
+            document.body.removeChild(textArea);
+        }
+
+        // --- EXPENSES ---
+        function addExpense() {
+            const nameEl = document.getElementById('expense-name');
+            const qtyEl = document.getElementById('expense-qty');
+            const unitEl = document.getElementById('expense-unit');
+            const priceEl = document.getElementById('expense-price');
+            const name = nameEl.value.trim();
+            const rawQty = qtyEl.value.replace(',', '.');
+            const qty = rawQty ? parseFloat(rawQty) : ''; 
+            const unit = unitEl.value.trim();
+            const price = parseInt(priceEl.value);
+            if (!name || isNaN(price) || price <= 0) { showToast('Mohon isi nama dan harga!'); return; }
+            shiftData.expenses.push({ id: Date.now(), name: name, qty: qty, unit: unit, amount: price });
+            nameEl.value = ''; qtyEl.value = ''; unitEl.value = ''; priceEl.value = ''; nameEl.focus();
+            saveData(); renderContent(); updateFooter();
+        }
+
+        function deleteExpense(id) {
+            openModal('Hapus Pengeluaran?', 'Item ini akan dihapus dari daftar.', () => {
+                shiftData.expenses = shiftData.expenses.filter(e => e.id !== id);
+                saveData(); renderContent(); updateFooter();
+            });
+        }
+
+        function confirmReset() {
+            openModal('Reset Semua Data?', 'Data Awal, Akhir, Pengeluaran, dan Laporan akan dihapus total.', () => {
+                denominations.forEach(d => { shiftData.start[d.value] = ''; shiftData.end[d.value] = ''; });
+                shiftData.expenses = []; 
+                shiftData.qris = ''; shiftData.lainLain = ''; shiftData.setorTunai = '';
+                shiftData.qasir = ''; shiftData.notes = ''; shiftData.reportDate = new Date().toISOString().split('T')[0];
+                saveData(); renderContent(); updateFooter(); showToast('Data berhasil di-reset');
+            });
+        }
+
+        function openModal(title, message, actionCallback) {
+            const modal = document.getElementById('confirm-modal');
+            document.getElementById('modal-title').textContent = title;
+            document.getElementById('modal-message').textContent = message;
+            pendingAction = actionCallback;
+            modal.classList.remove('hidden');
+            setTimeout(() => { modal.classList.remove('opacity-0', 'pointer-events-none'); document.getElementById('confirm-modal-content').classList.remove('scale-95'); document.getElementById('confirm-modal-content').classList.add('scale-100'); }, 10);
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('confirm-modal');
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            document.getElementById('confirm-modal-content').classList.remove('scale-100');
+            document.getElementById('confirm-modal-content').classList.add('scale-95');
+            setTimeout(() => { modal.classList.add('hidden'); pendingAction = null; }, 200);
+        }
+
+        // --- RENDER FUNCTIONS ---
+        function renderDenomGrid(data, title) {
+            let html = `<div class="mb-4"><div class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 text-center">${title}</div><div class="grid grid-cols-5 gap-2">`;
+            denominations.forEach(d => {
+                const count = data[d.value] || 0;
+                html += `
+                    <div class="flex flex-col rounded-xl overflow-hidden border ${d.border}">
+                        <div class="${d.bg} ${d.color} text-[10px] font-bold py-2 h-auto min-h-[30px] flex items-center justify-center">
+                            ${formatLabel(d.value)}
+                        </div>
+                        <div class="bg-white text-slate-800 font-bold text-lg py-2 h-auto min-h-[32px] flex items-center justify-center">
+                            ${count}
+                        </div>
+                    </div>
+                `;
+            });
+            html += `</div></div>`;
+            return html;
+        }
+
+        function renderReport() {
+            const vals = getReportCalculations();
+            const formattedQris = shiftData.qris === '' ? '' : numberFormatter.format(shiftData.qris);
+            const formattedLainLain = shiftData.lainLain === '' ? '' : numberFormatter.format(shiftData.lainLain);
+            const formattedSetorTunai = shiftData.setorTunai === '' ? '' : numberFormatter.format(shiftData.setorTunai);
+            const formattedQasir = shiftData.qasir === '' ? '' : numberFormatter.format(shiftData.qasir);
+            const formattedDate = getFormattedDate(shiftData.reportDate);
+            let discLabel = '', discColor = '';
+            if (vals.discrepancy === 0) { discLabel = 'Sudah Sesuai'; discColor = 'text-emerald-600'; }
+            else if (vals.discrepancy > 0) { discLabel = 'Surplus (Lebih)'; discColor = 'text-yellow-600'; }
+            else { discLabel = 'Defisit (Kurang)'; discColor = 'text-red-600'; }
+
+            const gridAwal = renderDenomGrid(shiftData.start, 'Rincian Fisik Awal');
+            const gridAkhir = renderDenomGrid(shiftData.end, 'Rincian Fisik Akhir');
+
+            const staffIdentity = (window.currentUser && !window.currentUser.isAnonymous) 
+                ? window.currentUser.email 
+                : (window.manualStaffEmail || `<span class="text-red-400 italic">Identitas Belum Diatur</span>`);
+
+            mainContent.innerHTML = `
+            <div id="report-card" class="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 space-y-5">
+                <h2 class="text-center font-bold text-gray-900 text-lg">Laporan & Rekonsiliasi</h2>
+                
+                <div class="flex flex-col items-center justify-center space-y-1 py-3 bg-gray-50 rounded-xl border border-gray-100">
+                    <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Identitas Staff</span>
+                    <div id="staff-info-display" class="text-sm font-medium text-slate-700">${staffIdentity}</div>
+                </div>
+
+                <div class="mb-2 text-center">
+                    <label class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Tanggal Laporan</label>
+                    <div class="mt-1 relative flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity">
+                        <div class="text-slate-800 font-bold text-lg border-b border-gray-200 pb-1 px-4 min-w-[200px]">${formattedDate}</div>
+                        <input type="date" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" value="${shiftData.reportDate}" onchange="window.updateReportDate(this.value)" onclick="try{this.showPicker()}catch(e){}">
+                    </div>
+                </div>
+
+                <div class="space-y-2 text-sm border-b border-gray-100 pb-4">
+                    <div class="flex justify-between text-gray-600"><span>Kas Awal</span><span class="font-medium">${formatter.format(vals.startTotal)}</span></div>
+                    <div class="flex justify-between text-gray-600"><span>Kas Akhir</span><span class="font-medium">${formatter.format(vals.endTotal)}</span></div>
+                    <div class="flex justify-between text-gray-600"><span>Selisih Kas</span><span class="font-medium ${vals.netCashFlow >=0 ? 'text-green-600' : 'text-red-600'}">${formatter.format(vals.netCashFlow)}</span></div>
+                    <div class="flex justify-between text-gray-600"><span>Total Pengeluaran</span><span class="font-medium text-red-600">-${formatter.format(vals.expensesTotal)}</span></div>
+                    <div class="flex justify-between font-semibold pt-2 border-t border-gray-50 mt-2 text-slate-800"><span>Pendapatan Cash</span><span id="rep-pendapatan-cash">${formatter.format(vals.cashIncome)}</span></div>
+                </div>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Pendapatan QRIS/Transfer</label>
+                        <input type="text" inputmode="numeric" placeholder="0" class="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-right font-semibold text-slate-800 outline-none" value="${formattedQris}" oninput="window.updateFormattedInput('qris', this)">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Pendapatan Lain-Lain</label>
+                        <input type="text" inputmode="numeric" placeholder="0" class="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-right font-semibold text-slate-800 outline-none" value="${formattedLainLain}" oninput="window.updateFormattedInput('lainLain', this)">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Setor Tunai</label>
+                        <input type="text" inputmode="numeric" placeholder="0" class="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-right font-semibold text-slate-800 outline-none" value="${formattedSetorTunai}" oninput="window.updateFormattedInput('setorTunai', this)">
+                    </div>
+                    <div class="flex justify-between font-semibold text-sm pt-2 border-t border-gray-50 mt-2 text-slate-800">
+                        <span>Total Pendapatan</span>
+                        <span id="rep-total-pendapatan" class="text-emerald-700">${formatter.format(vals.totalIncome)}</span>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Pendapatan Moka</label>
+                        <input type="text" inputmode="numeric" placeholder="0" class="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-right font-semibold text-slate-800 outline-none" value="${formattedQasir}" oninput="window.updateFormattedInput('qasir', this)">
+                    </div>
+                </div>
+                <div class="bg-slate-50 p-4 rounded-xl border border-gray-200">
+                    <div class="text-center">
+                        <div class="text-xs text-gray-500 font-semibold uppercase mb-1">Total Selisih</div>
+                        <div id="rep-selisih-pendapatan" class="font-bold text-2xl ${discColor}">${formatter.format(vals.discrepancy)}</div>
+                        <div id="rep-selisih-label" class="text-xs font-medium mt-1 ${discColor}">${discLabel}</div>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">Keterangan Selisih</label>
+                    <textarea rows="3" placeholder="Jelaskan penyebab selisih..." class="w-full p-3 bg-white border border-gray-200 rounded-lg text-sm text-slate-800 focus:ring-1 focus:ring-emerald-500 outline-none resize-none" oninput="window.updateNotesInput(this.value)">${shiftData.notes}</textarea>
+                </div>
+                <div class="border-t border-gray-50 pt-4 space-y-4">${gridAwal}${gridAkhir}</div>
+                <div class="pt-2 space-y-3" data-html2canvas-ignore="true">
+                    <button onclick="window.handleReportAndSave()" class="w-full flex items-center justify-center space-x-2 bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-xl font-semibold transition-colors">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21l1.9-5.7a8.5 8.5 0 1 1 3.8 3.8z"/></svg>
+                        <span>Laporkan & Simpan</span>
+                    </button>
+                    <div class="grid grid-cols-2 gap-3">
+                        <button onclick="window.captureScreenshot()" class="flex items-center justify-center space-x-2 bg-white border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-50 py-3 rounded-xl font-semibold transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                            <span>Screenshot</span>
+                        </button>
+                        <button onclick="window.copyReport()" class="flex items-center justify-center space-x-2 bg-white border-2 border-emerald-600 text-emerald-600 hover:bg-emerald-50 py-3 rounded-xl font-semibold transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>
+                            <span>Salin Teks</span>
+                        </button>
+                    </div>
+                </div>
+            </div>`;
+            footerContainer.style.display = 'none';
+        }
+
+        function renderInputList() {
+            const counts = shiftData[currentMode];
+            denominations.forEach(denom => {
+                const qty = counts[denom.value];
+                const subtotal = (qty || 0) * denom.value;
+                const formattedValue = denom.value.toLocaleString('id-ID');
+                const borderClass = qty ? denom.border : 'border-transparent hover:border-gray-200';
+                const row = document.createElement('div');
+                row.id = `row-${denom.value}`;
+                row.className = `flex items-center p-3 rounded-xl border-2 transition-all duration-200 bg-white shadow-sm ${borderClass}`;
+                row.innerHTML = `<div class="flex-shrink-0 w-20 h-12 flex items-center justify-center rounded-lg font-bold text-sm ${denom.bg} ${denom.color}">${formattedValue}</div><div class="flex-1 mx-4"><label class="text-xs text-gray-400 font-medium uppercase tracking-wider mb-0.5 block">Quantity</label><input type="number" inputmode="numeric" pattern="[0-9]*" min="0" placeholder="0" class="w-full text-lg font-semibold text-slate-900 placeholder-gray-300 focus:outline-none" value="${qty}" onfocus="this.select()" oninput="window.updateCount(${denom.value}, this.value)"></div><div class="text-right min-w-[80px]"><span class="text-xs text-gray-400 font-medium block">Subtotal</span><span id="subtotal-${denom.value}" class="font-medium ${subtotal > 0 ? 'text-slate-900' : 'text-gray-300'}">${subtotal > 0 ? formatter.format(subtotal).replace('Rp', '').trim() : '-'}</span></div>`;
+                mainContent.appendChild(row);
+            });
+            footerContainer.style.display = 'block';
+        }
+
+        function renderExpenses() {
+            const form = document.createElement('div');
+            form.className = "bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6";
+            form.innerHTML = `
+                <h3 class="text-sm font-semibold text-gray-700 mb-3">Tambah Pengeluaran</h3>
+                <div class="space-y-3">
+                    <input id="expense-name" type="text" placeholder="Nama Barang" class="w-full p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-emerald-500 text-sm">
+                    <div class="flex space-x-1">
+                        <input id="expense-qty" type="number" inputmode="decimal" step="any" placeholder="Qty" class="w-14 p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-emerald-500 text-center text-sm">
+                        <input id="expense-unit" type="text" placeholder="Satuan" class="w-16 p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-emerald-500 text-center text-sm">
+                        <input id="expense-price" type="number" inputmode="numeric" placeholder="Harga" class="flex-1 min-w-0 p-2 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-emerald-500 text-sm">
+                        <button onclick="window.addExpense()" class="bg-emerald-600 text-white px-4 py-2 rounded-lg font-medium hover:bg-emerald-700 active:bg-emerald-800 transition-colors">+</button>
+                    </div>
+                </div>`;
+            mainContent.appendChild(form);
+            const listContainer = document.createElement('div');
+            listContainer.className = "space-y-2";
+            if (shiftData.expenses.length === 0) { listContainer.innerHTML = `<div class="text-center text-gray-400 text-sm py-8">Belum ada pengeluaran</div>`; } else {
+                [...shiftData.expenses].reverse().forEach(item => {
+                    const detailText = item.qty ? `Qty: ${item.qty} ${item.unit || ''}` : 'Pengeluaran';
+                    const itemEl = document.createElement('div');
+                    itemEl.className = "flex justify-between items-center p-3 bg-white rounded-xl shadow-sm border border-gray-100 fade-in";
+                    itemEl.innerHTML = `<div><div class="font-medium text-slate-800">${item.name}</div><div class="text-xs text-gray-400">${detailText}</div></div><div class="flex items-center space-x-3"><span class="font-semibold text-red-600">-${formatter.format(item.amount).replace('Rp', '').trim()}</span><button onclick="window.deleteExpense(${item.id})" class="p-2 -mr-2 text-gray-400 hover:text-red-500 transition-colors"><svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button></div>`;
+                    listContainer.appendChild(itemEl);
+                });
+            }
+            mainContent.appendChild(listContainer);
+            footerContainer.style.display = 'block';
+        }
+
+        function renderContent() {
+            mainContent.innerHTML = '';
+            if (currentMode === 'report') renderReport();
+            else if (currentMode === 'expenses') renderExpenses();
+            else renderInputList();
+        }
+
+        function updateReportMath() {
+            const vals = getReportCalculations();
+            document.getElementById('rep-pendapatan-cash').textContent = formatter.format(vals.cashIncome);
+            document.getElementById('rep-total-pendapatan').textContent = formatter.format(vals.totalIncome);
+            const disc = vals.discrepancy;
+            let label = '', color = '';
+            if (disc === 0) { label = 'Sudah Sesuai'; color = 'text-emerald-600'; }
+            else if (disc > 0) { label = 'Surplus (Lebih)'; color = 'text-yellow-600'; }
+            else { label = 'Defisit (Kurang)'; color = 'text-red-600'; }
+            const discEl = document.getElementById('rep-selisih-pendapatan');
+            discEl.textContent = formatter.format(disc);
+            discEl.className = `font-bold text-2xl ${color}`;
+            const labelEl = document.getElementById('rep-selisih-label');
+            labelEl.textContent = label;
+            labelEl.className = `text-xs font-medium mt-1 ${color}`;
+        }
+
+        function getScreenshotFilename() {
+            return `Ketjeh_Report_${shiftData.reportDate}_${Date.now()}.png`;
+        }
+
+        function getReportText() {
+            const vals = getReportCalculations();
+            const dateStr = getFormattedDate(shiftData.reportDate);
+            const staffStr = (window.currentUser && !window.currentUser.isAnonymous) 
+                ? `\nOleh: ${window.currentUser.email}` 
+                : (window.manualStaffEmail ? `\nOleh: ${window.manualStaffEmail}` : '\nOleh: Staff (Anonim)');
+            
+            let expenseDetails = "";
+            if (shiftData.expenses.length > 0) {
+                expenseDetails = "\n\nRincian Pengeluaran:\n" + shiftData.expenses.map(e => {
+                    const unitStr = e.unit ? ` ${e.unit}` : '';
+                    return `- ${e.name}${e.qty ? ` (${e.qty}${unitStr})` : ''}: ${formatter.format(e.amount)}`;
+                }).join('\n');
+            }
+            
+            return `*LAPORAN KASIR KETJEH SEAFOOD*\nTanggal: ${dateStr}${staffStr}\n\nKas Awal: ${formatter.format(vals.startTotal)}\nKas Akhir: ${formatter.format(vals.endTotal)}\nSelisih Kas: ${formatter.format(vals.netCashFlow)}\nTotal Pengeluaran: ${formatter.format(vals.expensesTotal)}\nSetor Tunai: ${formatter.format(vals.setorTunai)}\n\nPendapatan Cash: ${formatter.format(vals.cashIncome)}\nPendapatan QRIS: ${formatter.format(vals.qris)}\nPendapatan Lain-Lain: ${formatter.format(vals.lainLain)}\n\n*Total Pendapatan: ${formatter.format(vals.totalIncome)}*\n*Pendapatan Moka: ${formatter.format(vals.qasir)}*\n------------------\n*SELISIH AKHIR: ${formatter.format(vals.discrepancy)}*${expenseDetails}\n\nKeterangan: ${shiftData.notes || '-'}`;
+        }
+
+        function prepareScreenshotClone() {
+            const original = document.getElementById('report-card');
+            const clone = original.cloneNode(true);
+            clone.style.position = 'fixed'; clone.style.top = '-10000px'; clone.style.left = '-10000px'; clone.style.width = '500px'; 
+            clone.classList.add('bg-white', 'px-8', 'py-8');
+            
+            const staffLabel = clone.querySelector('#staff-info-display');
+            if (staffLabel) {
+                staffLabel.textContent = (window.currentUser && !window.currentUser.isAnonymous) 
+                    ? window.currentUser.email 
+                    : (window.manualStaffEmail || "Staff (Anonim)");
+            }
+
+            const replaceInputWithStatic = (inputName, labelText, value) => {
+                const labels = Array.from(clone.querySelectorAll('label'));
+                const targetLabel = labels.find(l => l.textContent.includes(labelText));
+                if (targetLabel) {
+                    const container = targetLabel.parentElement;
+                    const staticRow = document.createElement('div');
+                    staticRow.className = "flex justify-between text-gray-600 text-sm py-1";
+                    staticRow.innerHTML = `<span>${labelText}</span><span class="font-medium">${formatter.format(value)}</span>`;
+                    container.replaceWith(staticRow);
+                }
+            };
+
+            replaceInputWithStatic('qris', 'Pendapatan QRIS/Transfer', typeof shiftData.qris === 'number' ? shiftData.qris : 0);
+            replaceInputWithStatic('lainLain', 'Pendapatan Lain-Lain', typeof shiftData.lainLain === 'number' ? shiftData.lainLain : 0);
+            replaceInputWithStatic('setorTunai', 'Setor Tunai', typeof shiftData.setorTunai === 'number' ? shiftData.setorTunai : 0);
+            replaceInputWithStatic('qasir', 'Pendapatan Moka', typeof shiftData.qasir === 'number' ? shiftData.qasir : 0);
+
+            clone.querySelectorAll('input, textarea, button').forEach(el => {
+                const staticVal = document.createElement('div');
+                staticVal.className = "text-sm font-semibold text-slate-800 py-1";
+                if (el.tagName === 'INPUT') staticVal.textContent = el.value || '0';
+                else if (el.tagName === 'TEXTAREA') staticVal.textContent = el.value || '-';
+                
+                if (el.parentElement) {
+                    if (el.parentElement.tagName !== 'DIV' || !el.parentElement.classList.contains('relative')) {
+                        el.replaceWith(staticVal);
+                    } else {
+                        el.parentElement.replaceWith(staticVal);
+                    }
+                }
+            });
+            if(clone.querySelector('[data-html2canvas-ignore]')) clone.querySelector('[data-html2canvas-ignore]').remove();
+            return clone;
+        }
+
+        function captureScreenshot() {
+            showToast('Memproses gambar...');
+            const clone = prepareScreenshotClone();
+            document.body.appendChild(clone);
+            html2canvas(clone, { scale: 2, backgroundColor: '#ffffff', useCORS: true }).then(canvas => {
+                const link = document.createElement('a');
+                link.download = getScreenshotFilename();
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+                showToast('Gambar tersimpan!');
+                document.body.removeChild(clone);
+            }).catch(e => { console.error(e); showToast('Gagal simpan gambar'); });
+        }
+
+        async function handleReportAndSave() {
+            const identitySet = (window.currentUser && !window.currentUser.isAnonymous) || window.manualStaffEmail;
+            if (!identitySet) {
+                showToast('Mohon identifikasi diri terlebih dahulu!');
+                window.showManualIdentityPrompt();
+                return;
+            }
+
+            showToast('Menyimpan ke Cloud...');
+            const reportText = getReportText();
+            const calcs = getReportCalculations();
+            
+            // 1. Save to Firestore
+            await window.saveReportToCloud(calcs, reportText);
+
+            // 2. Drive Upload & Screenshot
+            const clone = prepareScreenshotClone();
+            document.body.appendChild(clone);
+            html2canvas(clone, { scale: 2, backgroundColor: '#ffffff', useCORS: true }).then(canvas => {
+                const dataUrl = canvas.toDataURL('image/png');
+                const base64 = dataUrl.split(',')[1];
+                const filename = getScreenshotFilename();
+                
+                fetch(GOOGLE_SCRIPT_URL, {
+                    method: 'POST', mode: 'no-cors', redirect: "follow",
+                    body: JSON.stringify({ image: base64, filename: filename, folderId: GOOGLE_DRIVE_FOLDER_ID, staff: (window.currentUser?.email || window.manualStaffEmail) })
+                });
+
+                canvas.toBlob(blob => {
+                    document.body.removeChild(clone);
+                    if (!blob) return;
+                    const file = new File([blob], filename, { type: 'image/png' });
+                    const shareData = { files: [file], text: reportText, title: 'Laporan Ketjeh' };
+                    if (navigator.canShare && navigator.canShare(shareData)) {
+                        navigator.share(shareData).catch(e => { if (e.name !== 'AbortError') showToast('Gagal share.'); });
+                    } else { 
+                        doCopy(reportText);
+                        showToast('Teks disalin & Data tersimpan!');
+                    }
+                }, 'image/png');
+            });
+        }
+
+        function copyReport() { doCopy(getReportText()); }
+
+        window.switchTab = switchTab;
+        window.confirmReset = confirmReset;
+        window.copyCurrentTotal = copyCurrentTotal;
+        window.updateCount = updateCount;
+        window.addExpense = addExpense;
+        window.deleteExpense = deleteExpense;
+        window.updateFormattedInput = updateFormattedInput;
+        window.updateNotesInput = updateNotesInput;
+        window.updateReportDate = updateReportDate;
+        window.captureScreenshot = captureScreenshot;
+        window.handleReportAndSave = handleReportAndSave;
+        window.copyReport = copyReport;
+        window.closeModal = closeModal;
+        window.showToast = showToast;
+
+        document.getElementById('confirm-yes-btn').onclick = function() { if (pendingAction) pendingAction(); closeModal(); };
+        switchTab('start');
+    </script>
+</body>
+</html>
