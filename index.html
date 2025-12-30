@@ -151,6 +151,9 @@
         .tab-inactive:hover { color: #334155; }
         .fade-in { animation: fadeIn 0.3s ease-in-out; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .overflow-x-auto { -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+        .overflow-x-auto::-webkit-scrollbar { display: none; }
     </style>
 </head>
 <body class="bg-gray-100 text-slate-800 min-h-screen pb-40">
@@ -176,12 +179,13 @@
                 </div>
             </div>
 
-            <div class="px-2 pb-3">
-                <div class="flex p-1 bg-gray-100 rounded-xl space-x-1">
-                    <button onclick="window.switchTab('start')" id="tab-start" class="flex-1 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-active">Awal</button>
-                    <button onclick="window.switchTab('end')" id="tab-end" class="flex-1 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Akhir</button>
-                    <button onclick="window.switchTab('expenses')" id="tab-expenses" class="flex-1 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Pengeluaran</button>
-                    <button onclick="window.switchTab('report')" id="tab-report" class="flex-1 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Laporan</button>
+            <div class="px-2 pb-3 overflow-x-auto">
+                <div class="flex p-1 bg-gray-100 rounded-xl space-x-1 min-w-max">
+                    <button onclick="window.switchTab('start')" id="tab-start" class="px-4 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-active">Awal</button>
+                    <button onclick="window.switchTab('end')" id="tab-end" class="px-4 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Akhir</button>
+                    <button onclick="window.switchTab('expenses')" id="tab-expenses" class="px-4 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Pengeluaran</button>
+                    <button onclick="window.switchTab('compliments')" id="tab-compliments" class="px-4 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Compliment</button>
+                    <button onclick="window.switchTab('report')" id="tab-report" class="px-4 py-2 text-[11px] sm:text-xs font-medium rounded-lg transition-all duration-200 tab-inactive">Laporan</button>
                 </div>
             </div>
         </div>
@@ -199,7 +203,7 @@
         </div>
 
         <div id="confirm-modal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center p-4 backdrop-blur-sm transition-all duration-200 opacity-0 pointer-events-none" style="transition: opacity 0.2s ease-out;">
-            <div class="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl transform scale-95 transition-transform duration-200" id="confirm-modal-content">
+            <div class="bg-white rounded-2xl p-6 max-sm w-full shadow-2xl transform scale-95 transition-transform duration-200" id="confirm-modal-content">
                 <h3 class="font-bold text-lg mb-2 text-slate-900" id="modal-title">Konfirmasi</h3>
                 <p class="text-gray-600 mb-6 text-sm" id="modal-message">Apakah anda yakin?</p>
                 <div class="flex space-x-3">
@@ -231,8 +235,20 @@
         const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzakj9LZ3LX5xxQKZ0P_Ea-ZpZCaWfZHqrE0LWvZYtCyy5qmI-0YUov4nnORZ5a1KL_hg/exec';
 
         let currentMode = 'start';
-        let shiftData = { start: {}, end: {}, expenses: [], qris: '', lainLain: '', setorTunai: '', qasir: '', notes: '', reportDate: new Date().toISOString().split('T')[0] };
+        let shiftData = { 
+            start: {}, 
+            end: {}, 
+            expenses: [], 
+            compliments: [], 
+            qris: '', 
+            lainLain: '', 
+            setorTunai: '', 
+            qasir: '', 
+            notes: '', 
+            reportDate: new Date().toISOString().split('T')[0] 
+        };
         let pendingAction = null;
+        window.rawComplimentAmount = 0; // Persistent raw value for responsive rounding
 
         denominations.forEach(d => { shiftData.start[d.value] = ''; shiftData.end[d.value] = ''; });
 
@@ -243,6 +259,7 @@
                 if (parsed.start) shiftData.start = { ...shiftData.start, ...parsed.start };
                 if (parsed.end) shiftData.end = { ...shiftData.end, ...parsed.end };
                 if (Array.isArray(parsed.expenses)) shiftData.expenses = parsed.expenses;
+                if (Array.isArray(parsed.compliments)) shiftData.compliments = parsed.compliments;
                 shiftData.qris = parsed.qris !== undefined ? parsed.qris : '';
                 shiftData.lainLain = parsed.lainLain !== undefined ? parsed.lainLain : '';
                 shiftData.setorTunai = parsed.setorTunai !== undefined ? parsed.setorTunai : '';
@@ -266,6 +283,7 @@
 
         function calculateTotal(mode) {
             if (mode === 'expenses') return shiftData.expenses.reduce((acc, curr) => acc + curr.amount, 0);
+            if (mode === 'compliments') return shiftData.compliments.reduce((acc, curr) => acc + curr.amount, 0);
             const data = shiftData[mode];
             return denominations.reduce((acc, curr) => {
                 const qty = data[curr.value];
@@ -277,6 +295,7 @@
             const startTotal = calculateTotal('start');
             const endTotal = calculateTotal('end');
             const expensesTotal = calculateTotal('expenses');
+            const complimentsTotal = calculateTotal('compliments');
             const qris = typeof shiftData.qris === 'number' ? shiftData.qris : 0;
             const lainLain = typeof shiftData.lainLain === 'number' ? shiftData.lainLain : 0;
             const setorTunai = typeof shiftData.setorTunai === 'number' ? shiftData.setorTunai : 0;
@@ -285,7 +304,7 @@
             const totalIncome = cashIncome + qris;
             const qasir = typeof shiftData.qasir === 'number' ? shiftData.qasir : 0;
             const discrepancy = totalIncome - qasir - lainLain;
-            return { startTotal, endTotal, expensesTotal, netCashFlow, cashIncome, qris, lainLain, setorTunai, totalIncome, qasir, discrepancy };
+            return { startTotal, endTotal, expensesTotal, complimentsTotal, netCashFlow, cashIncome, qris, lainLain, setorTunai, totalIncome, qasir, discrepancy };
         }
 
         function formatLabel(value) {
@@ -321,8 +340,9 @@
 
         function switchTab(mode) {
             currentMode = mode;
-            ['start', 'end', 'expenses', 'report'].forEach(m => {
+            ['start', 'end', 'expenses', 'compliments', 'report'].forEach(m => {
                 const btn = document.getElementById(`tab-${m}`);
+                if (!btn) return;
                 if (m === mode) { btn.classList.remove('tab-inactive'); btn.classList.add('tab-active'); }
                 else { btn.classList.add('tab-inactive'); btn.classList.remove('tab-active'); }
             });
@@ -338,7 +358,7 @@
         }
 
         function updateRowVisuals(changedValue) {
-            if (currentMode === 'expenses' || currentMode === 'report') return;
+            if (currentMode === 'expenses' || currentMode === 'compliments' || currentMode === 'report') return;
             const counts = shiftData[currentMode];
             const qty = counts[changedValue];
             const denom = denominations.find(d => d.value === changedValue);
@@ -356,6 +376,7 @@
             if (currentMode === 'start') footerLabel.textContent = 'Total Kas Awal';
             else if (currentMode === 'end') footerLabel.textContent = 'Total Kas Akhir';
             else if (currentMode === 'expenses') footerLabel.textContent = 'Total Pengeluaran';
+            else if (currentMode === 'compliments') footerLabel.textContent = 'Total Compliment/Disc';
             if (total > 0) copyBtn.classList.remove('hidden'); else copyBtn.classList.add('hidden');
         }
 
@@ -365,6 +386,7 @@
             if (currentMode === 'start') label = "Total Kas Awal";
             else if (currentMode === 'end') label = "Total Kas Akhir";
             else if (currentMode === 'expenses') label = "Total Pengeluaran";
+            else if (currentMode === 'compliments') label = "Total Compliment/Discount";
             doCopy(`${label}: ${formatter.format(total)}`);
         }
 
@@ -407,10 +429,82 @@
             });
         }
 
+        // --- COMPLIMENTS ---
+        function updateComplimentCalc() {
+            const salesEl = document.getElementById('compliment-sales');
+            const percentEl = document.getElementById('compliment-percent');
+            const resultEl = document.getElementById('compliment-amount-display');
+            const resultHidden = document.getElementById('compliment-amount');
+
+            const sales = parseFloat(salesEl.value) || 0;
+            const percent = parseFloat(percentEl.value) || 0;
+            const result = Math.round(sales * (percent / 100));
+
+            // Store result in window global so rounding buttons can reference the original math
+            window.rawComplimentAmount = result;
+
+            resultEl.textContent = formatter.format(result);
+            resultHidden.value = result;
+        }
+
+        function applyRounding(multiple, direction) {
+            const resultHidden = document.getElementById('compliment-amount');
+            const resultEl = document.getElementById('compliment-amount-display');
+            
+            // ALWAYS start from the original calculation result (raw amount)
+            // so that switching between buttons stays "responsive" to original value
+            let current = window.rawComplimentAmount || 0;
+            
+            if (current === 0) return;
+
+            if (direction === 'up') {
+                current = Math.ceil(current / multiple) * multiple;
+            } else {
+                current = Math.floor(current / multiple) * multiple;
+            }
+
+            resultHidden.value = current;
+            resultEl.textContent = formatter.format(current);
+            showToast(`Dibulatkan ke ${multiple} (${direction === 'up' ? 'atas' : 'bawah'})`);
+        }
+
+        function addCompliment() {
+            const descEl = document.getElementById('compliment-desc');
+            const amountEl = document.getElementById('compliment-amount');
+            const salesEl = document.getElementById('compliment-sales');
+            const percentEl = document.getElementById('compliment-percent');
+            
+            const desc = descEl.value.trim();
+            const amount = parseInt(amountEl.value);
+
+            if (!desc || isNaN(amount) || amount <= 0) { showToast('Mohon isi keterangan dan nilai!'); return; }
+            
+            shiftData.compliments.push({ id: Date.now(), description: desc, amount: amount });
+            
+            // Reset state
+            descEl.value = ''; 
+            amountEl.value = '0';
+            salesEl.value = '';
+            percentEl.value = '';
+            window.rawComplimentAmount = 0;
+            updateComplimentCalc();
+            descEl.focus();
+            
+            saveData(); renderContent(); updateFooter();
+        }
+
+        function deleteCompliment(id) {
+            openModal('Hapus Compliment?', 'Item ini akan dihapus dari daftar.', () => {
+                shiftData.compliments = shiftData.compliments.filter(c => c.id !== id);
+                saveData(); renderContent(); updateFooter();
+            });
+        }
+
         function confirmReset() {
-            openModal('Reset Semua Data?', 'Data Awal, Akhir, Pengeluaran, dan Laporan akan dihapus total.', () => {
+            openModal('Reset Semua Data?', 'Data Awal, Akhir, Pengeluaran, Compliment, dan Laporan akan dihapus total.', () => {
                 denominations.forEach(d => { shiftData.start[d.value] = ''; shiftData.end[d.value] = ''; });
                 shiftData.expenses = []; 
+                shiftData.compliments = [];
                 shiftData.qris = ''; shiftData.lainLain = ''; shiftData.setorTunai = '';
                 shiftData.qasir = ''; shiftData.notes = ''; shiftData.reportDate = new Date().toISOString().split('T')[0];
                 saveData(); renderContent(); updateFooter(); showToast('Data berhasil di-reset');
@@ -495,6 +589,7 @@
                     <div class="flex justify-between text-gray-600"><span>Kas Akhir</span><span class="font-medium">${formatter.format(vals.endTotal)}</span></div>
                     <div class="flex justify-between text-gray-600"><span>Selisih Kas</span><span class="font-medium ${vals.netCashFlow >=0 ? 'text-green-600' : 'text-red-600'}">${formatter.format(vals.netCashFlow)}</span></div>
                     <div class="flex justify-between text-gray-600"><span>Total Pengeluaran</span><span class="font-medium text-red-600">-${formatter.format(vals.expensesTotal)}</span></div>
+                    <div class="flex justify-between text-gray-600"><span>Total Compliment/Disc</span><span class="font-medium text-blue-600">${formatter.format(vals.complimentsTotal)}</span></div>
                     <div class="flex justify-between font-semibold pt-2 border-t border-gray-50 mt-2 text-slate-800"><span>Pendapatan Cash</span><span id="rep-pendapatan-cash">${formatter.format(vals.cashIncome)}</span></div>
                 </div>
                 <div class="space-y-4">
@@ -597,10 +692,76 @@
             footerContainer.style.display = 'block';
         }
 
+        function renderCompliments() {
+            const form = document.createElement('div');
+            form.className = "bg-white p-4 rounded-xl shadow-sm border border-gray-200 mb-6";
+            form.innerHTML = `
+                <h3 class="text-sm font-semibold text-gray-700 mb-3">Tambah Compliment / Discount</h3>
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Keterangan</label>
+                        <input id="compliment-desc" type="text" placeholder="Contoh: Disc Member / Compliment Tamu" class="w-full p-2.5 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-blue-500 text-sm">
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Sales Amount (Rp)</label>
+                            <input id="compliment-sales" type="number" inputmode="numeric" placeholder="Total Belanja" class="w-full p-2.5 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-blue-500 text-sm" oninput="window.updateComplimentCalc()">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">Percentage (%)</label>
+                            <input id="compliment-percent" type="number" inputmode="decimal" placeholder="%" class="w-full p-2.5 border border-gray-200 rounded-lg outline-none focus:ring-1 focus:ring-blue-500 text-sm text-center" oninput="window.updateComplimentCalc()">
+                        </div>
+                    </div>
+
+                    <div class="bg-blue-50 p-3 rounded-xl border border-blue-100 flex justify-between items-center">
+                        <div class="text-xs font-semibold text-blue-600">Nilai Akhir:</div>
+                        <div id="compliment-amount-display" class="text-lg font-bold text-blue-700">Rp 0</div>
+                        <input type="hidden" id="compliment-amount" value="0">
+                    </div>
+
+                    <div class="grid grid-cols-4 gap-2">
+                        <button onclick="window.applyRounding(500, 'down')" class="py-2 text-[10px] font-bold border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">500 ↓</button>
+                        <button onclick="window.applyRounding(500, 'up')" class="py-2 text-[10px] font-bold border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">500 ↑</button>
+                        <button onclick="window.applyRounding(1000, 'down')" class="py-2 text-[10px] font-bold border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">1000 ↓</button>
+                        <button onclick="window.applyRounding(1000, 'up')" class="py-2 text-[10px] font-bold border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 transition-colors">1000 ↑</button>
+                    </div>
+
+                    <button onclick="window.addCompliment()" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 active:bg-blue-800 transition-colors shadow-md shadow-blue-100">Tambah ke Daftar</button>
+                </div>`;
+            mainContent.appendChild(form);
+            
+            const listContainer = document.createElement('div');
+            listContainer.className = "space-y-2";
+            if (shiftData.compliments.length === 0) { 
+                listContainer.innerHTML = `<div class="text-center text-gray-400 text-sm py-8">Belum ada record compliment</div>`; 
+            } else {
+                [...shiftData.compliments].reverse().forEach(item => {
+                    const itemEl = document.createElement('div');
+                    itemEl.className = "flex justify-between items-center p-3 bg-white rounded-xl shadow-sm border border-gray-100 fade-in";
+                    itemEl.innerHTML = `
+                        <div>
+                            <div class="font-medium text-slate-800">${item.description}</div>
+                            <div class="text-xs text-gray-400">Compliment/Discount</div>
+                        </div>
+                        <div class="flex items-center space-x-3">
+                            <span class="font-semibold text-blue-600">${formatter.format(item.amount).replace('Rp', '').trim()}</span>
+                            <button onclick="window.deleteCompliment(${item.id})" class="p-2 -mr-2 text-gray-400 hover:text-red-500 transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                            </button>
+                        </div>`;
+                    listContainer.appendChild(itemEl);
+                });
+            }
+            mainContent.appendChild(listContainer);
+            footerContainer.style.display = 'block';
+        }
+
         function renderContent() {
             mainContent.innerHTML = '';
             if (currentMode === 'report') renderReport();
             else if (currentMode === 'expenses') renderExpenses();
+            else if (currentMode === 'compliments') renderCompliments();
             else renderInputList();
         }
 
@@ -639,8 +800,15 @@
                     return `- ${e.name}${e.qty ? ` (${e.qty}${unitStr})` : ''}: ${formatter.format(e.amount)}`;
                 }).join('\n');
             }
+
+            let complimentDetails = "";
+            if (shiftData.compliments.length > 0) {
+                complimentDetails = "\n\nRincian Compliment/Disc:\n" + shiftData.compliments.map(c => {
+                    return `- ${c.description}: ${formatter.format(c.amount)}`;
+                }).join('\n');
+            }
             
-            return `*LAPORAN KASIR KETJEH SEAFOOD*\nTanggal: ${dateStr}${staffStr}\n\nKas Awal: ${formatter.format(vals.startTotal)}\nKas Akhir: ${formatter.format(vals.endTotal)}\nSelisih Kas: ${formatter.format(vals.netCashFlow)}\nTotal Pengeluaran: ${formatter.format(vals.expensesTotal)}\nSetor Tunai: ${formatter.format(vals.setorTunai)}\n\nPendapatan Cash: ${formatter.format(vals.cashIncome)}\nPendapatan QRIS: ${formatter.format(vals.qris)}\nPendapatan Lain-Lain: ${formatter.format(vals.lainLain)}\n\n*Total Pendapatan: ${formatter.format(vals.totalIncome)}*\n*Pendapatan Moka: ${formatter.format(vals.qasir)}*\n------------------\n*SELISIH AKHIR: ${formatter.format(vals.discrepancy)}*${expenseDetails}\n\nKeterangan: ${shiftData.notes || '-'}`;
+            return `*LAPORAN KASIR KETJEH SEAFOOD*\nTanggal: ${dateStr}${staffStr}\n\nKas Awal: ${formatter.format(vals.startTotal)}\nKas Akhir: ${formatter.format(vals.endTotal)}\nSelisih Kas: ${formatter.format(vals.netCashFlow)}\nTotal Pengeluaran: ${formatter.format(vals.expensesTotal)}\nTotal Compliment/Disc: ${formatter.format(vals.complimentsTotal)}\nSetor Tunai: ${formatter.format(vals.setorTunai)}\n\nPendapatan Cash: ${formatter.format(vals.cashIncome)}\nPendapatan QRIS: ${formatter.format(vals.qris)}\nPendapatan Lain-Lain: ${formatter.format(vals.lainLain)}\n\n*Total Pendapatan: ${formatter.format(vals.totalIncome)}*\n*Pendapatan Moka: ${formatter.format(vals.qasir)}*\n------------------\n*SELISIH AKHIR: ${formatter.format(vals.discrepancy)}*${expenseDetails}${complimentDetails}\n\nKeterangan: ${shiftData.notes || '-'}`;
         }
 
         function prepareScreenshotClone() {
@@ -756,6 +924,10 @@
         window.updateCount = updateCount;
         window.addExpense = addExpense;
         window.deleteExpense = deleteExpense;
+        window.addCompliment = addCompliment;
+        window.deleteCompliment = deleteCompliment;
+        window.updateComplimentCalc = updateComplimentCalc;
+        window.applyRounding = applyRounding;
         window.updateFormattedInput = updateFormattedInput;
         window.updateNotesInput = updateNotesInput;
         window.updateReportDate = updateReportDate;
