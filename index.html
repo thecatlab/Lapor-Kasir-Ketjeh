@@ -18,8 +18,20 @@
         import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut, signInWithCustomToken, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, addDoc, serverTimestamp, onSnapshot, query } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // Global Firebase Config provided by environment
-        const firebaseConfig = JSON.parse(__firebase_config);
+        /**
+         * NOTE FOR GITHUB PAGES:
+         * To use this on GitHub Pages, replace the config below with your actual Firebase config object:
+         * const firebaseConfig = { apiKey: "...", authDomain: "...", ... };
+         */
+        const firebaseConfig = {
+            apiKey: "AIzaSyAJR9skBOWyNciAJvxSrnPznwoAVWVhV-E",
+            authDomain: "laporan-kasir-ketjeh.firebaseapp.com",
+            projectId: "laporan-kasir-ketjeh",
+            storageBucket: "laporan-kasir-ketjeh.firebasestorage.app",
+            messagingSenderId: "858827490940",
+            appId: "1:858827490940:web:7ee0925387ecc0ead56bf9"
+        };
+
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
@@ -39,6 +51,7 @@
                 }
             } catch (e) {
                 console.error("Auth Init Error:", e);
+                updateAuthUI();
             }
         };
         initAuth();
@@ -51,12 +64,13 @@
 
         function updateAuthUI() {
             const authBtn = document.getElementById('auth-btn');
+            if (!authBtn) return;
             const user = window.currentUser;
             
             if (user && !user.isAnonymous) {
                 authBtn.innerHTML = `
                     <div class="flex items-center space-x-2">
-                        <img src="${user.photoURL}" class="w-6 h-6 rounded-full border border-gray-200">
+                        <img src="${user.photoURL || ''}" class="w-6 h-6 rounded-full border border-gray-200" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%23cbd5e1%22 stroke-width=%222%22><circle cx=%2212%22 cy=%228%22 r=%224%22/><path d=%22M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2%22/></svg>'">
                         <span class="hidden sm:inline text-xs font-medium text-gray-600">${user.email}</span>
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
                     </div>
@@ -84,7 +98,7 @@
                     try {
                         await signInWithPopup(auth, provider);
                     } catch (e) {
-                        if (e.code === 'auth/unauthorized-domain') {
+                        if (e.code === 'auth/unauthorized-domain' || e.code === 'auth/configuration-not-found') {
                             window.showManualIdentityPrompt();
                         } else {
                             console.error("Popup Error:", e);
@@ -103,14 +117,14 @@
         };
 
         window.saveReportToCloud = async (reportData, reportText) => {
-            if (!window.currentUser) return;
+            if (!auth.currentUser) return;
             try {
                 // RULE 1: Specific path structure
                 const reportsRef = collection(db, 'artifacts', appId, 'public', 'data', 'reports');
                 await addDoc(reportsRef, {
                     ...reportData,
                     reportText: reportText,
-                    staffEmail: (window.currentUser && !window.currentUser.isAnonymous) ? window.currentUser.email : window.manualStaffEmail,
+                    staffEmail: (window.currentUser && !window.currentUser.isAnonymous) ? window.currentUser.email : (window.manualStaffEmail || "Anonim"),
                     staffName: window.currentUser.displayName || "Staff Manual",
                     timestamp: serverTimestamp()
                 });
@@ -120,7 +134,7 @@
         };
 
         window.showManualIdentityPrompt = () => {
-            const email = prompt("Google Login dibatasi di domain ini. Silakan masukkan Email Staff Anda untuk tracking:");
+            const email = prompt("Google Login tidak tersedia. Silakan masukkan Email Staff Anda untuk tracking:");
             if (email && email.includes('@')) {
                 window.manualStaffEmail = email;
                 localStorage.setItem('ketjeh_staff_email', email);
@@ -217,7 +231,7 @@
             { value: 100, color: 'text-slate-500', bg: 'bg-slate-100', border: 'border-slate-300' },
         ];
 
-        const GOOGLE_DRIVE_FOLDER_ID = '1wBzVkBvLXEPn5pO87oYmJXo7wiG5H2LR';
+        const GOOGLE_DRIVE_FOLDER_ID = '11RPvEq8_oiytOxlDas7slGXqQxqTfEUv';
         const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzakj9LZ3LX5xxQKZ0P_Ea-ZpZCaWfZHqrE0LWvZYtCyy5qmI-0YUov4nnORZ5a1KL_hg/exec';
 
         let currentMode = 'start';
